@@ -103,6 +103,30 @@ EOF
 done
 
 ################
+# Helper: derive year from unix epoch
+################
+
+year_from_epoch() {
+    local epoch="$1"
+    if date -d "@${epoch}" +%Y >/dev/null 2>&1; then
+        # GNU date
+        date -d "@${epoch}" +%Y
+    elif date -r "${epoch}" +%Y >/dev/null 2>&1; then
+        # BSD / macOS date
+        date -r "${epoch}" +%Y
+    else
+        echo "ERR: Cannot determine year from epoch='${epoch}'. Is 'date' available?" >&2
+        exit 1
+    fi
+}
+
+################
+# Derive year from EPOCH
+################
+
+YEAR="$(year_from_epoch "$EPOCH")"
+
+################
 # The SIGNER should have a corresponding .gpg key in builder-keys/
 ################
 
@@ -139,30 +163,6 @@ if [ -z "$NO_SIGN" ] && ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/
     echo "ERR: GPG can't seem to find any secret key named '${SIGNER}'"
     exit 1
 fi
-
-################
-# Helper: derive year from unix epoch
-################
-
-year_from_epoch() {
-    local epoch="$1"
-    if date -d "@${epoch}" +%Y >/dev/null 2>&1; then
-        # GNU date
-        date -d "@${epoch}" +%Y
-    elif date -r "${epoch}" +%Y >/dev/null 2>&1; then
-        # BSD / macOS date
-        date -r "${epoch}" +%Y
-    else
-        echo "ERR: Cannot determine year from epoch='${epoch}'. Is 'date' available?" >&2
-        exit 1
-    fi
-}
-
-################
-# Derive year from EPOCH
-################
-
-YEAR="$(year_from_epoch "$EPOCH")"
 
 ################
 # Set up output directory
