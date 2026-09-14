@@ -71,7 +71,7 @@ EOF
 # Required env vars should be non-empty
 ################
 
-if [ -z "$SIGNER" ] || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ] || [ -z "$EPOCH" ]; then
+if ([ -z "$SIGNER" ] && [ -z "$NO_SIGN" ]) || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ] || [ -z "$EPOCH" ]; then
     cmd_usage
     exit 1
 fi
@@ -150,6 +150,20 @@ ${unfilled_hash}  ${unfilled_basename}
 EOF
 
 ################
+# NO_SIGN path ends here:
+################
+
+if [ -n "$NO_SIGN" ]; then
+    echo "Computed SHA256SUMS:"
+    cat $temp_sha256sums
+    echo ""
+    rm -f "$temp_sha256sums"
+
+    echo "Not signing SHA256SUMS as \$NO_SIGN is set"
+    exit 0
+fi
+
+################
 # The SIGNER should have a corresponding .gpg key in builder-keys/
 ################
 
@@ -183,7 +197,7 @@ fi
 # The GPG key should be usable
 ################
 
-if [ -z "$NO_SIGN" ] && ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/null 2>&1; then
+if ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/null 2>&1; then
     echo "ERR: GPG can't seem to find any secret key named '${SIGNER}'"
     rm -f "$temp_sha256sums"
     exit 1
@@ -235,24 +249,20 @@ echo ""
 ##   Sign   ##
 ##############
 
-if [ -z "$NO_SIGN" ]; then
-    if [ ! -e "$sha256sums_file".asc ]; then
-        ${GPG} --detach-sign \
-               --digest-algo sha256 \
-               --local-user "$SIGNER" \
-               --armor \
-               --output "$sha256sums_file".asc "$sha256sums_file"
-    else
-        echo "Signature '${sha256sums_file}.asc' already exists."
-    fi
+if [ ! -e "$sha256sums_file".asc ]; then
+    ${GPG} --detach-sign \
+           --digest-algo sha256 \
+           --local-user "$SIGNER" \
+           --armor \
+           --output "$sha256sums_file".asc "$sha256sums_file"
 else
-    echo "Not signing SHA256SUMS as \$NO_SIGN is set"
+    echo "Signature '${sha256sums_file}.asc' already exists."
 fi
 
 echo ""
 echo "Done. Results for epoch '${EPOCH}', signer '${SIGNER}':"
 echo "    ${sha256sums_file}   (attestation)"
-if [ -z "$NO_SIGN" ] && [ -e "$sha256sums_file".asc ]; then
+if [ -e "$sha256sums_file".asc ]; then
     echo "    ${sha256sums_file}.asc   (signature)"
 fi
 
