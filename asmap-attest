@@ -121,10 +121,33 @@ year_from_epoch() {
 }
 
 ################
+# Derive variables
+################
+
+txt_basename="$(basename "$ASMAP_TXT")"
+filled_basename="$(basename "$ENCODED_FILLED")"
+unfilled_basename="$(basename "$ENCODED_UNFILLED")"
+
+################
 # Derive year from EPOCH
 ################
 
 YEAR="$(year_from_epoch "$EPOCH")"
+
+################
+# Produce SHA256SUMS file
+################
+
+txt_hash="$(sha256sum "$ASMAP_TXT" | cut -d' ' -f1)"
+filled_hash="$(sha256sum "$ENCODED_FILLED" | cut -d' ' -f1)"
+unfilled_hash="$(sha256sum "$ENCODED_UNFILLED" | cut -d' ' -f1)"
+
+temp_sha256sums="$(mktemp)"
+cat > "$temp_sha256sums" <<EOF
+${txt_hash}  ${txt_basename}
+${filled_hash}  ${filled_basename}
+${unfilled_hash}  ${unfilled_basename}
+EOF
 
 ################
 # The SIGNER should have a corresponding .gpg key in builder-keys/
@@ -152,6 +175,7 @@ EOF
         echo "          (builder-keys directory not found)"
     fi
     echo ""
+    rm -f "$temp_sha256sums"
     exit 1
 fi
 
@@ -161,6 +185,7 @@ fi
 
 if [ -z "$NO_SIGN" ] && ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/null 2>&1; then
     echo "ERR: GPG can't seem to find any secret key named '${SIGNER}'"
+    rm -f "$temp_sha256sums"
     exit 1
 fi
 
@@ -175,22 +200,7 @@ mkdir -p "$signer_dir"
 ##  Attest  ##
 ##############
 
-txt_basename="$(basename "$ASMAP_TXT")"
-filled_basename="$(basename "$ENCODED_FILLED")"
-unfilled_basename="$(basename "$ENCODED_UNFILLED")"
-
-txt_hash="$(sha256sum "$ASMAP_TXT" | cut -d' ' -f1)"
-filled_hash="$(sha256sum "$ENCODED_FILLED" | cut -d' ' -f1)"
-unfilled_hash="$(sha256sum "$ENCODED_UNFILLED" | cut -d' ' -f1)"
-
 sha256sums_file="$signer_dir/SHA256SUMS"
-
-temp_sha256sums="$(mktemp)"
-cat > "$temp_sha256sums" <<EOF
-${txt_hash}  ${txt_basename}
-${filled_hash}  ${filled_basename}
-${unfilled_hash}  ${unfilled_basename}
-EOF
 
 if [ -e "$sha256sums_file" ]; then
     if diff -u "$sha256sums_file" "$temp_sha256sums" >/dev/null 2>&1; then
