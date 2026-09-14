@@ -37,7 +37,7 @@ Synopsis:
         ASMAP_TXT=<path/to/final_result.txt> \\
         ENCODED_FILLED=<path/to/filled.dat> \\
         ENCODED_UNFILLED=<path/to/unfilled.dat> \\
-        EPOCH=<unix_timestamp> \\
+        [ EPOCH=<unix_timestamp> ] \\
         [ NO_SIGN=1 ] \\
       ./asmap-attest
 
@@ -71,7 +71,7 @@ EOF
 # Required env vars should be non-empty
 ################
 
-if ([ -z "$SIGNER" ] && [ -z "$NO_SIGN" ]) || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ] || [ -z "$EPOCH" ]; then
+if ([ -z "$SIGNER" ] && [ -z "$NO_SIGN" ]) || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ]; then
     cmd_usage
     exit 1
 fi
@@ -127,6 +127,41 @@ year_from_epoch() {
 txt_basename="$(basename "$ASMAP_TXT")"
 filled_basename="$(basename "$ENCODED_FILLED")"
 unfilled_basename="$(basename "$ENCODED_UNFILLED")"
+
+if [[ "$filled_basename" =~ ^([0-9]+)_asmap.dat$ ]]; then
+    EPOCH_filled=${BASH_REMATCH[1]}
+    if [ -z "$EPOCH" ]; then
+        EPOCH="$EPOCH_filled"
+    elif [ "$EPOCH_filled" != "$EPOCH" ]; then
+        echo "ERR: Derived epoch value from \$ENCODED_FILLED doesn't match \$EPOCH."
+        exit 1
+    fi
+else
+    echo "Non-standard \$ENCODED_FILLED filename: $filled_basename"
+fi
+
+if [[ "$unfilled_basename" =~ ^([0-9]+)_asmap_unfilled.dat$ ]]; then
+    EPOCH_unfilled=${BASH_REMATCH[1]}
+    if [ -n "$EPOCH_filled" ] && [ "$EPOCH_filled" != "$EPOCH_unfilled" ]; then
+        echo "ERR: Mismatching epochs derived from \$ENCODED_*: $EPOCH_filled and $EPOCH_unfilled."
+        exit 1
+    elif [ -z "$EPOCH" ]; then
+        EPOCH="$EPOCH_unfilled"
+    elif [ "$EPOCH_unfilled" != "$EPOCH" ]; then
+        echo "ERR: Derived epoch value from \$ENCODED_UNFILLED doesn't match \$EPOCH."
+        exit 1
+    fi
+else
+    echo "Non-standard \$ENCODED_UNFILLED filename: $unfilled_basename"
+fi
+
+if [ -z "$EPOCH" ]; then
+    echo "ERR: Missing EPOCH value and could not derive it from filled and" \
+         "unfilled filenames as we expected *matching* numeric epoch" \
+         "prefixes for filled and unfilled files, got $filled_basename and" \
+         "$unfilled_basename."
+    exit 1
+fi
 
 ################
 # Derive year from EPOCH
