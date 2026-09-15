@@ -37,7 +37,7 @@ Synopsis:
         ASMAP_TXT=<path/to/final_result.txt> \\
         ENCODED_FILLED=<path/to/filled.dat> \\
         ENCODED_UNFILLED=<path/to/unfilled.dat> \\
-        EPOCH=<unix_timestamp> \\
+        [ EPOCH=<unix_timestamp> ] \\
         [ NO_SIGN=1 ] \\
       ./asmap-attest
 
@@ -56,14 +56,15 @@ Example:
 
 Environment variables:
 
-    SIGNER            GPG key name used for signing
-    ASMAP_TXT         Path to the asmap text file (e.g. final_result.txt)
-    ENCODED_FILLED    Path to the filled encoded binary (.dat)
-    ENCODED_UNFILLED  Path to the unfilled encoded binary (.dat)
-    EPOCH             Unix timestamp to identify the run
+    SIGNER            GPG key name used for signing (REQUIRED unless NO_SIGN is set)
+    ASMAP_TXT         Path to the asmap text file (e.g. final_result.txt) (REQUIRED)
+    ENCODED_FILLED    Path to the filled encoded binary (.dat) (REQUIRED)
+    ENCODED_UNFILLED  Path to the unfilled encoded binary (.dat) (REQUIRED)
+    EPOCH             Unix timestamp to identify the run (REQUIRED unless we can
+                      derive it from ENCODED_*, in which case its optional and
+                      may serve as a sanity-check against them)
     NO_SIGN           If set and non-empty, skip GPG signing
     GPG               Override the gpg binary (default: gpg)
-
 EOF
 }
 
@@ -71,7 +72,7 @@ EOF
 # Required env vars should be non-empty
 ################
 
-if [ -z "$SIGNER" ] || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ] || [ -z "$EPOCH" ]; then
+if ([ -z "$SIGNER" ] && [ -z "$NO_SIGN" ]) || [ -z "$ASMAP_TXT" ] || [ -z "$ENCODED_FILLED" ] || [ -z "$ENCODED_UNFILLED" ]; then
     cmd_usage
     exit 1
 fi
@@ -103,6 +104,102 @@ EOF
 done
 
 ################
+# Helper: derive year from unix epoch
+################
+
+year_from_epoch() {
+    local epoch="$1"
+    if date -d "@${epoch}" +%Y >/dev/null 2>&1; then
+        # GNU date
+        date -d "@${epoch}" +%Y
+    elif date -r "${epoch}" +%Y >/dev/null 2>&1; then
+        # BSD / macOS date
+        date -r "${epoch}" +%Y
+    else
+        echo "ERR: Cannot determine year from epoch='${epoch}'. Is 'date' available?" >&2
+        exit 1
+    fi
+}
+
+################
+# Derive variables
+################
+
+txt_basename="$(basename "$ASMAP_TXT")"
+filled_basename="$(basename "$ENCODED_FILLED")"
+unfilled_basename="$(basename "$ENCODED_UNFILLED")"
+
+if [[ "$filled_basename" =~ ^([0-9]+)_asmap.dat$ ]]; then
+    EPOCH_filled=${BASH_REMATCH[1]}
+    if [ -z "$EPOCH" ]; then
+        EPOCH="$EPOCH_filled"
+    elif [ "$EPOCH_filled" != "$EPOCH" ]; then
+        echo "ERR: Derived epoch value from \$ENCODED_FILLED doesn't match \$EPOCH."
+        exit 1
+    fi
+else
+    echo "Non-standard \$ENCODED_FILLED filename: $filled_basename"
+fi
+
+if [[ "$unfilled_basename" =~ ^([0-9]+)_asmap_unfilled.dat$ ]]; then
+    EPOCH_unfilled=${BASH_REMATCH[1]}
+    if [ -n "$EPOCH_filled" ] && [ "$EPOCH_filled" != "$EPOCH_unfilled" ]; then
+        echo "ERR: Mismatching epochs derived from \$ENCODED_*: $EPOCH_filled and $EPOCH_unfilled."
+        exit 1
+    elif [ -z "$EPOCH" ]; then
+        EPOCH="$EPOCH_unfilled"
+    elif [ "$EPOCH_unfilled" != "$EPOCH" ]; then
+        echo "ERR: Derived epoch value from \$ENCODED_UNFILLED doesn't match \$EPOCH."
+        exit 1
+    fi
+else
+    echo "Non-standard \$ENCODED_UNFILLED filename: $unfilled_basename"
+fi
+
+if [ -z "$EPOCH" ]; then
+    echo "ERR: Missing EPOCH value and could not derive it from filled and" \
+         "unfilled filenames as we expected *matching* numeric epoch" \
+         "prefixes for filled and unfilled files, got $filled_basename and" \
+         "$unfilled_basename."
+    exit 1
+fi
+
+################
+# Derive year from EPOCH
+################
+
+YEAR="$(year_from_epoch "$EPOCH")"
+
+################
+# Produce SHA256SUMS file
+################
+
+txt_hash="$(sha256sum "$ASMAP_TXT" | cut -d' ' -f1)"
+filled_hash="$(sha256sum "$ENCODED_FILLED" | cut -d' ' -f1)"
+unfilled_hash="$(sha256sum "$ENCODED_UNFILLED" | cut -d' ' -f1)"
+
+temp_sha256sums="$(mktemp)"
+cat > "$temp_sha256sums" <<EOF
+${txt_hash}  ${txt_basename}
+${filled_hash}  ${filled_basename}
+${unfilled_hash}  ${unfilled_basename}
+EOF
+
+################
+# NO_SIGN path ends here:
+################
+
+if [ -n "$NO_SIGN" ]; then
+    echo "Computed SHA256SUMS:"
+    cat $temp_sha256sums
+    echo ""
+    rm -f "$temp_sha256sums"
+
+    echo "Not signing SHA256SUMS as \$NO_SIGN is set"
+    exit 0
+fi
+
+################
 # The SIGNER should have a corresponding .gpg key in builder-keys/
 ################
 
@@ -128,6 +225,7 @@ EOF
         echo "          (builder-keys directory not found)"
     fi
     echo ""
+    rm -f "$temp_sha256sums"
     exit 1
 fi
 
@@ -135,34 +233,11 @@ fi
 # The GPG key should be usable
 ################
 
-if [ -z "$NO_SIGN" ] && ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/null 2>&1; then
+if ! ${GPG} --dry-run --list-secret-keys "${SIGNER}" >/dev/null 2>&1; then
     echo "ERR: GPG can't seem to find any secret key named '${SIGNER}'"
+    rm -f "$temp_sha256sums"
     exit 1
 fi
-
-################
-# Helper: derive year from unix epoch
-################
-
-year_from_epoch() {
-    local epoch="$1"
-    if date -d "@${epoch}" +%Y >/dev/null 2>&1; then
-        # GNU date
-        date -d "@${epoch}" +%Y
-    elif date -r "${epoch}" +%Y >/dev/null 2>&1; then
-        # BSD / macOS date
-        date -r "${epoch}" +%Y
-    else
-        echo "ERR: Cannot determine year from epoch='${epoch}'. Is 'date' available?" >&2
-        exit 1
-    fi
-}
-
-################
-# Derive year from EPOCH
-################
-
-YEAR="$(year_from_epoch "$EPOCH")"
 
 ################
 # Set up output directory
@@ -175,22 +250,7 @@ mkdir -p "$signer_dir"
 ##  Attest  ##
 ##############
 
-txt_basename="$(basename "$ASMAP_TXT")"
-filled_basename="$(basename "$ENCODED_FILLED")"
-unfilled_basename="$(basename "$ENCODED_UNFILLED")"
-
-txt_hash="$(sha256sum "$ASMAP_TXT" | cut -d' ' -f1)"
-filled_hash="$(sha256sum "$ENCODED_FILLED" | cut -d' ' -f1)"
-unfilled_hash="$(sha256sum "$ENCODED_UNFILLED" | cut -d' ' -f1)"
-
 sha256sums_file="$signer_dir/SHA256SUMS"
-
-temp_sha256sums="$(mktemp)"
-cat > "$temp_sha256sums" <<EOF
-${txt_hash}  ${txt_basename}
-${filled_hash}  ${filled_basename}
-${unfilled_hash}  ${unfilled_basename}
-EOF
 
 if [ -e "$sha256sums_file" ]; then
     if diff -u "$sha256sums_file" "$temp_sha256sums" >/dev/null 2>&1; then
@@ -225,24 +285,20 @@ echo ""
 ##   Sign   ##
 ##############
 
-if [ -z "$NO_SIGN" ]; then
-    if [ ! -e "$sha256sums_file".asc ]; then
-        ${GPG} --detach-sign \
-               --digest-algo sha256 \
-               --local-user "$SIGNER" \
-               --armor \
-               --output "$sha256sums_file".asc "$sha256sums_file"
-    else
-        echo "Signature '${sha256sums_file}.asc' already exists."
-    fi
+if [ ! -e "$sha256sums_file".asc ]; then
+    ${GPG} --detach-sign \
+           --digest-algo sha256 \
+           --local-user "$SIGNER" \
+           --armor \
+           --output "$sha256sums_file".asc "$sha256sums_file"
 else
-    echo "Not signing SHA256SUMS as \$NO_SIGN is set"
+    echo "Signature '${sha256sums_file}.asc' already exists."
 fi
 
 echo ""
 echo "Done. Results for epoch '${EPOCH}', signer '${SIGNER}':"
 echo "    ${sha256sums_file}   (attestation)"
-if [ -z "$NO_SIGN" ] && [ -e "$sha256sums_file".asc ]; then
+if [ -e "$sha256sums_file".asc ]; then
     echo "    ${sha256sums_file}.asc   (signature)"
 fi
 
