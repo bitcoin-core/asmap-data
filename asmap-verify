@@ -48,6 +48,7 @@ Synopsis:
     env [ ASMAP_DATA_REPO=<path/to/asmap-data> ] \
         [ EPOCH=<unix_timestamp> ] \
         [ SIGNER=<signer> ] \
+        [ GPG=<path/to/gpg> ] \
       ./asmap-verify
 
 Example verifying all epochs:
@@ -71,6 +72,7 @@ Environment variables:
     EPOCH            (optional) Only verify this epoch; default: verify all epochs
     SIGNER           (optional) Use this signer's SHA256SUMS as the compare base;
                      default: use the first one found
+    GPG              (optional) Override the gpg binary (default: gpg)
 
 EOF
 }
